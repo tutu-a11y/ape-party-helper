@@ -1,0 +1,42 @@
+name: Build
+
+on: workflow_dispatch
+permissions: write-all
+
+jobs:
+  release-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: "x64"
+            goarch: "amd64"
+          - arch: "arm64"
+            goarch: "arm64"
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Build
+        env:
+          GOOS: darwin
+          GOAMD64: v1
+          GOARCH: ${{ matrix.goarch }}
+        run: go build
+      - name: Update Tag
+        uses: richardsimko/update-tag@v1
+        with:
+          tag_name: ${{ matrix.arch }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ matrix.arch }}
+          tag_name: ${{ matrix.arch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: party.mihomo.helper
