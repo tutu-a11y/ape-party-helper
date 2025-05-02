@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,6 +90,45 @@ func NewServer(addr string) *Server {
 	}
 }
 
+// Validate PAC URL
+func validatePacURL(urlStr string) (string, error) {
+	if strings.ContainsAny(urlStr, "&|;`$(){}[]<>\\") {
+		return "", errors.New("URL contains illegal characters")
+	}
+
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return "", err
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", errors.New("URL must use http or https protocol")
+	}
+
+	return urlStr, nil
+}
+
+// Validate global proxy parameters
+func validateGlobalProxy(host, port, bypass string) error {
+	if strings.ContainsAny(host, "&|;`$(){}[]<>\\") {
+		return errors.New("Host contains illegal characters")
+	}
+
+	_, err := strconv.Atoi(port)
+	if err != nil {
+		return errors.New("Port must be numeric")
+	}
+
+	domains := strings.Split(bypass, " ")
+	for _, domain := range domains {
+		if strings.ContainsAny(domain, "&|;`$(){}[]<>\\") {
+			return errors.New("Bypass domain contains illegal characters")
+		}
+	}
+
+	return nil
+}
+
 func (s *Server) setupRoutes() {
 	s.engine.POST("/pac", func(c *gin.Context) {
 		var pac Pac
@@ -97,12 +139,26 @@ func (s *Server) setupRoutes() {
 			})
 			return
 		}
-		script := get_services + "\n" + set_pac
-		script = strings.Replace(script, "${pac.URL}", pac.URL, -1)
-		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.Output()
+
+		// Validate PAC URL
+		validURL, err := validatePacURL(pac.URL)
 		if err != nil {
-			log.Fatal(err)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		script := get_services + "\n" + set_pac
+		script = strings.Replace(script, "${pac.URL}", validURL, -1)
+		cmd := exec.Command("bash", "-c", script)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  err.Error(),
+				"output": string(output),
+			})
+			return
 		}
 		log.Printf("Output: %s", output)
 		c.String(200, "Proxy has been set as pac mode for all services")
@@ -118,14 +174,26 @@ func (s *Server) setupRoutes() {
 			return
 		}
 
+		// Validate global proxy parameters
+		if err := validateGlobalProxy(global.HOST, global.PORT, global.BYPASS); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
 		script := get_services + "\n" + set_global
 		script = strings.Replace(script, "${global.HOST}", global.HOST, -1)
 		script = strings.Replace(script, "${global.PORT}", global.PORT, -1)
 		script = strings.Replace(script, "${global.BYPASS}", global.BYPASS, -1)
 		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.Output()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Fatal(err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  err.Error(),
+				"output": string(output),
+			})
+			return
 		}
 		log.Printf("Output: %s", output)
 		c.String(200, "Proxy has been set as global mode for all services")
@@ -134,9 +202,13 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/off", func(c *gin.Context) {
 		script := get_services + "\n" + turn_off
 		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.Output()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Fatal(err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  err.Error(),
+				"output": string(output),
+			})
+			return
 		}
 		log.Printf("Output: %s", output)
 		c.String(200, "Proxy has been turned off for all services")
