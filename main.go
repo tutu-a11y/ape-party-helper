@@ -18,49 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var get_services = `get_services() {
-    networksetup -listnetworkserviceorder | grep "^([0-9])" | sed -e 's/^([0-9]) //'
-}`
-
-var turn_off = `while IFS= read -r service; do
-    echo "Turning off proxy for '$service'..."
-    networksetup -setautoproxystate "$service" off
-	networksetup -setproxyautodiscovery "$service" off
-    networksetup -setwebproxystate "$service" off
-    networksetup -setsecurewebproxystate "$service" off
-    networksetup -setsocksfirewallproxystate "$service" off
-done < <(get_services)
-echo "Proxy has been turned off for all services"`
-
-var set_pac = `while IFS= read -r service; do
-    echo "Setting PAC proxy for '$service'..."
-	networksetup -setautoproxystate "$service" off
-	networksetup -setproxyautodiscovery "$service" off
-    networksetup -setwebproxystate "$service" off
-    networksetup -setsecurewebproxystate "$service" off
-    networksetup -setsocksfirewallproxystate "$service" off
-
-    networksetup -setautoproxyurl "$service" "${pac.URL}"
-    networksetup -setautoproxystate "$service" on
-	networksetup -setproxyautodiscovery "$service" on
-done < <(get_services)
-echo "PAC proxy has been set to ${pac.URL} for all services"`
-
-var set_global = `while IFS= read -r service; do
-    echo "Setting global proxy for '$service'..."
-	networksetup -setautoproxystate "$service" off
-	networksetup -setproxyautodiscovery "$service" off
-    networksetup -setwebproxystate "$service" off
-    networksetup -setsecurewebproxystate "$service" off
-    networksetup -setsocksfirewallproxystate "$service" off
-
-    networksetup -setwebproxy "$service" "${global.HOST}" "${global.PORT}"
-    networksetup -setsecurewebproxy "$service" "${global.HOST}" "${global.PORT}"
-    networksetup -setsocksfirewallproxy "$service" "${global.HOST}" "${global.PORT}"
-    networksetup -setproxybypassdomains "$service" "${global.BYPASS}"
-done < <(get_services)
-echo "Global proxy has been set to ${global.HOST}:${global.PORT} for all services"`
-
 type Server struct {
 	engine *gin.Engine
 	addr   string
@@ -75,19 +32,6 @@ type Global struct {
 	HOST   string `json:"host"`
 	PORT   string `json:"port"`
 	BYPASS string `json:"bypass"`
-}
-
-func NewServer(addr string) *Server {
-	engine := gin.Default()
-	srv := &http.Server{
-		Handler: engine,
-	}
-
-	return &Server{
-		engine: engine,
-		addr:   addr,
-		srv:    srv,
-	}
 }
 
 // Validate PAC URL
@@ -129,6 +73,116 @@ func validateGlobalProxy(host, port, bypass string) error {
 	return nil
 }
 
+// Get network service list
+func getNetworkServices() ([]string, error) {
+	cmd := exec.Command("networksetup", "-listnetworkserviceorder")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(output), "\n")
+	var services []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "(") && strings.Contains(line, ")") {
+			service := strings.TrimSpace(strings.SplitN(line, ")", 2)[1])
+			services = append(services, service)
+		}
+	}
+
+	return services, nil
+}
+
+// Turn off all proxies for a service
+func turnOffProxies(service string) error {
+	commands := [][]string{
+		{"networksetup", "-setautoproxystate", service, "off"},
+		{"networksetup", "-setproxyautodiscovery", service, "off"},
+		{"networksetup", "-setwebproxystate", service, "off"},
+		{"networksetup", "-setsecurewebproxystate", service, "off"},
+		{"networksetup", "-setsocksfirewallproxystate", service, "off"},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command(args[0], args[1:]...)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Set PAC proxy for a service
+func setPACProxy(service, pacURL string) error {
+	if err := turnOffProxies(service); err != nil {
+		return err
+	}
+
+	// Set PAC URL
+	cmd1 := exec.Command("networksetup", "-setautoproxyurl", service, pacURL)
+	if err := cmd1.Run(); err != nil {
+		return err
+	}
+
+	// Enable PAC
+	cmd2 := exec.Command("networksetup", "-setautoproxystate", service, "on")
+	if err := cmd2.Run(); err != nil {
+		return err
+	}
+
+	cmd3 := exec.Command("networksetup", "-setproxyautodiscovery", service, "on")
+	if err := cmd3.Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Set global proxy for a service
+func setGlobalProxy(service, host, port, bypass string) error {
+	if err := turnOffProxies(service); err != nil {
+		return err
+	}
+
+	commands := [][]string{
+		{"networksetup", "-setwebproxy", service, host, port},
+		{"networksetup", "-setsecurewebproxy", service, host, port},
+		{"networksetup", "-setsocksfirewallproxy", service, host, port},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command(args[0], args[1:]...)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	// Set bypass domains if provided
+	if bypass != "" {
+		cmd := exec.Command("networksetup", "-setproxybypassdomains", service, bypass)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func NewServer(addr string) *Server {
+	engine := gin.Default()
+	srv := &http.Server{
+		Handler: engine,
+	}
+
+	return &Server{
+		engine: engine,
+		addr:   addr,
+		srv:    srv,
+	}
+}
+
 func (s *Server) setupRoutes() {
 	s.engine.POST("/pac", func(c *gin.Context) {
 		var pac Pac
@@ -149,19 +203,33 @@ func (s *Server) setupRoutes() {
 			return
 		}
 
-		script := get_services + "\n" + set_pac
-		script = strings.Replace(script, "${pac.URL}", validURL, -1)
-		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.CombinedOutput()
+		// Get all network services
+		services, err := getNetworkServices()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":  err.Error(),
-				"output": string(output),
+				"error": "Failed to get network services: " + err.Error(),
 			})
 			return
 		}
-		log.Printf("Output: %s", output)
-		c.String(200, "Proxy has been set as pac mode for all services")
+
+		// Set PAC proxy for each service
+		var errorMessages []string
+		for _, service := range services {
+			if err := setPACProxy(service, validURL); err != nil {
+				errorMessages = append(errorMessages, "Failed to set PAC proxy for "+service+": "+err.Error())
+			} else {
+				log.Printf("Set PAC proxy for %s to %s", service, validURL)
+			}
+		}
+
+		if len(errorMessages) > 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": strings.Join(errorMessages, "\n"),
+			})
+			return
+		}
+
+		c.String(200, "PAC proxy has been set for all services")
 	})
 
 	s.engine.POST("/global", func(c *gin.Context) {
@@ -182,35 +250,62 @@ func (s *Server) setupRoutes() {
 			return
 		}
 
-		script := get_services + "\n" + set_global
-		script = strings.Replace(script, "${global.HOST}", global.HOST, -1)
-		script = strings.Replace(script, "${global.PORT}", global.PORT, -1)
-		script = strings.Replace(script, "${global.BYPASS}", global.BYPASS, -1)
-		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.CombinedOutput()
+		// Get all network services
+		services, err := getNetworkServices()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":  err.Error(),
-				"output": string(output),
+				"error": "Failed to get network services: " + err.Error(),
 			})
 			return
 		}
-		log.Printf("Output: %s", output)
-		c.String(200, "Proxy has been set as global mode for all services")
+
+		// Set global proxy for each service
+		var errorMessages []string
+		for _, service := range services {
+			if err := setGlobalProxy(service, global.HOST, global.PORT, global.BYPASS); err != nil {
+				errorMessages = append(errorMessages, "Failed to set global proxy for "+service+": "+err.Error())
+			} else {
+				log.Printf("Set global proxy for %s to %s:%s", service, global.HOST, global.PORT)
+			}
+		}
+
+		if len(errorMessages) > 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": strings.Join(errorMessages, "\n"),
+			})
+			return
+		}
+
+		c.String(200, "Global proxy has been set for all services")
 	})
 
 	s.engine.GET("/off", func(c *gin.Context) {
-		script := get_services + "\n" + turn_off
-		cmd := exec.Command("bash", "-c", script)
-		output, err := cmd.CombinedOutput()
+		// Get all network services
+		services, err := getNetworkServices()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":  err.Error(),
-				"output": string(output),
+				"error": "Failed to get network services: " + err.Error(),
 			})
 			return
 		}
-		log.Printf("Output: %s", output)
+
+		// Turn off proxy for each service
+		var errorMessages []string
+		for _, service := range services {
+			if err := turnOffProxies(service); err != nil {
+				errorMessages = append(errorMessages, "Failed to turn off proxy for "+service+": "+err.Error())
+			} else {
+				log.Printf("Turned off proxy for %s", service)
+			}
+		}
+
+		if len(errorMessages) > 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": strings.Join(errorMessages, "\n"),
+			})
+			return
+		}
+
 		c.String(200, "Proxy has been turned off for all services")
 	})
 }
@@ -254,7 +349,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 使用 http.Server 的 Shutdown 方法
+	// Use http.Server's Shutdown method
 	if err := server.srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
