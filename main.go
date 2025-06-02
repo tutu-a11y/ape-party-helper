@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,16 +21,57 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func init() {
-	// 创建日志文件
-	f, err := os.OpenFile("mihomo-party-helper.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("error opening file: %v", err)
-	}
-	defer f.Close()
+var logFile *os.File
 
-	// 将标准输出和错误输出重定向到文件
+func getLogPath() string {
+	// 取运行服务的目录
+	var homeDir string
+
+	if home := os.Getenv("HOME"); home != "" {
+		homeDir = home
+	} else {
+
+		if currentUser, err := user.Current(); err == nil {
+			homeDir = currentUser.HomeDir
+		} else {
+			if userHome := os.Getenv("USER"); userHome != "" {
+				homeDir = filepath.Join("/Users", userHome)
+			} else {
+				// 最后回退到临时目录，避免硬编码特定用户
+				log.Printf("Warning: Unable to determine user home directory, using /tmp")
+				return filepath.Join("/tmp", "party.mihomo.helper.log")
+			}
+		}
+	}
+
+	// 日志目录
+	logDir := filepath.Join(homeDir, "Library", "Application Support", "mihomo-party", "logs")
+	return filepath.Join(logDir, "party.mihomo.helper.log")
+}
+
+func init() {
+	logPath := getLogPath()
+	logDir := filepath.Dir(logPath)
+
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		// 临时目录后备
+		logPath = filepath.Join("/tmp", "party.mihomo.helper.log")
+	}
+
+	// 创建日志文件
+	f, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatalf("error opening log file %s: %v", logPath, err)
+	}
+
+	logFile = f
+
 	log.SetOutput(f)
+
+	gin.DefaultWriter = io.MultiWriter(f, os.Stdout)
+	gin.DefaultErrorWriter = io.MultiWriter(f, os.Stderr)
+
+	log.Printf("Log file initialized at: %s", logPath)
 }
 
 type Server struct {
@@ -49,7 +93,7 @@ type Global struct {
 // Validate PAC URL
 func validatePacURL(urlStr string) (string, error) {
 	if strings.ContainsAny(urlStr, "&|;`$(){}[]<>\\") {
-		return "", errors.New("URL contains illegal characters")
+		return "", errors.New("url contains illegal characters")
 	}
 
 	u, err := url.Parse(urlStr)
@@ -58,7 +102,7 @@ func validatePacURL(urlStr string) (string, error) {
 	}
 
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errors.New("URL must use http or https protocol")
+		return "", errors.New("url must use http or https protocol")
 	}
 
 	return urlStr, nil
@@ -67,18 +111,18 @@ func validatePacURL(urlStr string) (string, error) {
 // Validate global proxy parameters
 func validateGlobalProxy(host, port, bypass string) error {
 	if strings.ContainsAny(host, "&|;`$(){}[]<>\\") {
-		return errors.New("Host contains illegal characters")
+		return errors.New("host contains illegal characters")
 	}
 
 	_, err := strconv.Atoi(port)
 	if err != nil {
-		return errors.New("Port must be numeric")
+		return errors.New("port must be numeric")
 	}
 
 	domains := strings.Split(bypass, " ")
 	for _, domain := range domains {
 		if strings.ContainsAny(domain, "&|;`$(){}[]<>\\") {
-			return errors.New("Bypass domain contains illegal characters")
+			return errors.New("bypass domain contains illegal characters")
 		}
 	}
 
@@ -292,6 +336,15 @@ func (s *Server) setupRoutes() {
 
 		if err := c.ShouldBindJSON(&global); err != nil {
 			log.Printf("Failed to parse global proxy request: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Validate global proxy parameters
+		if err := validateGlobalProxy(global.HOST, global.PORT, global.BYPASS); err != nil {
+			log.Printf("Global proxy validation failed: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
