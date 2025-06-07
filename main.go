@@ -24,41 +24,61 @@ import (
 var logFile *os.File
 
 func getLogPath() string {
-	// 取运行服务的目录
+	// Get user directory
 	var homeDir string
 
-	if home := os.Getenv("HOME"); home != "" {
-		homeDir = home
+	// Check SUDO_USER environment variable
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		homeDir = filepath.Join("/Users", sudoUser)
+		log.Printf("Using SUDO_USER directory: %s", homeDir)
 	} else {
-
-		if currentUser, err := user.Current(); err == nil {
-			homeDir = currentUser.HomeDir
+		// Check regular HOME environment variable excluding root
+		if home := os.Getenv("HOME"); home != "" && home != "/var/root" {
+			homeDir = home
+			log.Printf("Using HOME directory: %s", homeDir)
 		} else {
-			if userHome := os.Getenv("USER"); userHome != "" {
-				homeDir = filepath.Join("/Users", userHome)
+			// Get from system user information
+			if currentUser, err := user.Current(); err == nil && currentUser.HomeDir != "/var/root" {
+				homeDir = currentUser.HomeDir
+				log.Printf("Using current user directory: %s", homeDir)
 			} else {
-				// 最后回退到临时目录，避免硬编码特定用户
-				log.Printf("Warning: Unable to determine user home directory, using /tmp")
-				return filepath.Join("/tmp", "party.mihomo.helper.log")
+				// Look for user directories under /Users excluding shared folders
+				if userDirs, err := os.ReadDir("/Users"); err == nil {
+					for _, dir := range userDirs {
+						if dir.IsDir() && dir.Name() != "Shared" && dir.Name() != ".localized" {
+							homeDir = filepath.Join("/Users", dir.Name())
+							log.Printf("Using detected user directory: %s", homeDir)
+							break
+						}
+					}
+				}
+
+				// Fallback to temporary directory
+				if homeDir == "" {
+					log.Printf("Warning: Unable to determine user home directory, using /tmp")
+					return filepath.Join("/tmp", "party.mihomo.helper.log")
+				}
 			}
 		}
 	}
 
-	// 日志目录
+	// Log directory
 	logDir := filepath.Join(homeDir, "Library", "Application Support", "mihomo-party", "logs")
 	return filepath.Join(logDir, "party.mihomo.helper.log")
 }
 
 func init() {
+	// Get log file path
 	logPath := getLogPath()
 	logDir := filepath.Dir(logPath)
 
+	// Ensure log directory exists
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		// 临时目录后备
+		// If unable to create specified directory, use temporary directory
 		logPath = filepath.Join("/tmp", "party.mihomo.helper.log")
 	}
 
-	// 创建日志文件
+	// Create log file
 	f, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("error opening log file %s: %v", logPath, err)
@@ -66,10 +86,13 @@ func init() {
 
 	logFile = f
 
-	log.SetOutput(f)
+	// Multi-writer output
+	multiWriter := io.MultiWriter(f, os.Stdout)
+	log.SetOutput(multiWriter)
 
-	gin.DefaultWriter = io.MultiWriter(f, os.Stdout)
-	gin.DefaultErrorWriter = io.MultiWriter(f, os.Stderr)
+	// Gin log output to stdout
+	gin.DefaultWriter = os.Stdout
+	gin.DefaultErrorWriter = os.Stderr
 
 	log.Printf("Log file initialized at: %s", logPath)
 }
@@ -110,7 +133,7 @@ func validatePacURL(urlStr string) (string, error) {
 
 // Validate global proxy parameters
 func validateGlobalProxy(host, port, bypass string) error {
-	if strings.ContainsAny(host, "&|;`$(){}[]<>\\") {
+	if strings.ContainsAny(host, "&|;`$(){}[]\\") {
 		return errors.New("host contains illegal characters")
 	}
 
@@ -119,10 +142,25 @@ func validateGlobalProxy(host, port, bypass string) error {
 		return errors.New("port must be numeric")
 	}
 
-	domains := strings.Split(bypass, " ")
+	// Comma-separated and space-separated bypass domain lists
+	var domains []string
+	if strings.Contains(bypass, ",") {
+		domains = strings.Split(bypass, ",")
+	} else {
+		domains = strings.Split(bypass, " ")
+	}
+
 	for _, domain := range domains {
-		if strings.ContainsAny(domain, "&|;`$(){}[]<>\\") {
-			return errors.New("bypass domain contains illegal characters")
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		// Allow <local> format, and wildcard *
+		if strings.ContainsAny(domain, "&|;`$(){}[]\\") {
+			// Whether special format like <local>
+			if !(strings.HasPrefix(domain, "<") && strings.HasSuffix(domain, ">")) {
+				return errors.New("bypass domain contains illegal characters")
+			}
 		}
 	}
 
