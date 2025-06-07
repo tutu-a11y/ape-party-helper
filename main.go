@@ -98,9 +98,10 @@ func init() {
 }
 
 type Server struct {
-	engine *gin.Engine
-	addr   string
-	srv    *http.Server
+	engine   *gin.Engine
+	addr     string
+	srv      *http.Server
+	listener net.Listener
 }
 
 type Pac struct {
@@ -289,23 +290,7 @@ func (s *Server) setupRoutes() {
 	// Add logging for all routes
 	log.Printf("Setting up routes for server")
 
-	// Middleware to check and recreate socket if needed
-	socketCheck := func(c *gin.Context) {
-		if _, err := os.Stat(s.addr); os.IsNotExist(err) {
-			log.Printf("Socket file not found, recreating...")
-			if err := s.recreateSocket(); err != nil {
-				log.Printf("Failed to recreate socket: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": "Failed to recreate socket: " + err.Error(),
-				})
-				c.Abort()
-				return
-			}
-		}
-		c.Next()
-	}
-
-	s.engine.POST("/pac", socketCheck, func(c *gin.Context) {
+	s.engine.POST("/pac", func(c *gin.Context) {
 		log.Printf("Received PAC proxy request with URL: %s", c.Request.URL)
 		var pac Pac
 
@@ -368,7 +353,7 @@ func (s *Server) setupRoutes() {
 		c.String(200, "PAC proxy has been set for all services")
 	})
 
-	s.engine.POST("/global", socketCheck, func(c *gin.Context) {
+	s.engine.POST("/global", func(c *gin.Context) {
 		log.Printf("Received global proxy request with URL: %s", c.Request.URL)
 		var global Global
 
@@ -423,7 +408,7 @@ func (s *Server) setupRoutes() {
 		c.String(200, "Global proxy has been set for all services")
 	})
 
-	s.engine.GET("/off", socketCheck, func(c *gin.Context) {
+	s.engine.GET("/off", func(c *gin.Context) {
 		log.Printf("Received request to turn off proxy")
 		services, err := getNetworkServices()
 		if err != nil {
@@ -459,24 +444,6 @@ func (s *Server) setupRoutes() {
 	})
 }
 
-func (s *Server) Start() error {
-	s.setupRoutes()
-
-	// Remove existing socket file if exists
-	if err := os.RemoveAll(s.addr); err != nil {
-		log.Printf("Failed to remove existing socket file: %v", err)
-		return err
-	}
-
-	// Create new socket listener
-	if err := s.createSocket(); err != nil {
-		return err
-	}
-
-	log.Printf("Server started successfully, listening on %s", s.addr)
-	return nil
-}
-
 // Create initial socket
 func (s *Server) createSocket() error {
 	listener, err := net.Listen("unix", s.addr)
@@ -484,6 +451,9 @@ func (s *Server) createSocket() error {
 		log.Printf("Failed to create initial socket: %v", err)
 		return err
 	}
+
+	// Store listener reference
+	s.listener = listener
 
 	// Set socket permissions
 	if err := os.Chmod(s.addr, 0666); err != nil {
@@ -502,8 +472,9 @@ func (s *Server) createSocket() error {
 	return nil
 }
 
-// Recreate socket if it's missing
-func (s *Server) recreateSocket() error {
+func (s *Server) Start() error {
+	s.setupRoutes()
+
 	// Remove existing socket file if exists
 	if err := os.RemoveAll(s.addr); err != nil {
 		log.Printf("Failed to remove existing socket file: %v", err)
@@ -511,7 +482,101 @@ func (s *Server) recreateSocket() error {
 	}
 
 	// Create new socket listener
-	return s.createSocket()
+	if err := s.createSocket(); err != nil {
+		return err
+	}
+
+	// Start signal handler for socket recreation
+	s.startSignalHandler()
+
+	log.Printf("Server started successfully, listening on %s", s.addr)
+	return nil
+}
+
+// Signal handler to recreate socket on SIGUSR1
+func (s *Server) startSignalHandler() {
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGUSR1)
+
+		for {
+			select {
+			case <-sigChan:
+				log.Printf("Received SIGUSR1 signal, checking and recreating socket if needed")
+				if _, err := os.Stat(s.addr); os.IsNotExist(err) {
+					log.Printf("Socket file %s not found, recreating listener", s.addr)
+					if err := s.recreateListener(); err != nil {
+						log.Printf("Failed to recreate listener: %v", err)
+					} else {
+						log.Printf("Successfully recreated listener and socket file")
+					}
+				} else {
+					log.Printf("Socket file exists, no need to recreate")
+				}
+			}
+		}
+	}()
+}
+
+// Recreate the entire listener when socket file is missing
+func (s *Server) recreateListener() error {
+	log.Printf("Recreating listener for socket %s", s.addr)
+
+	// Store reference to old listener but don't close it immediately
+	oldListener := s.listener
+
+	// Remove any existing socket file
+	if err := os.RemoveAll(s.addr); err != nil {
+		log.Printf("Failed to remove existing socket file: %v", err)
+	}
+
+	// Create new listener
+	listener, err := net.Listen("unix", s.addr)
+	if err != nil {
+		log.Printf("Failed to recreate listener: %v", err)
+		return err
+	}
+	log.Printf("New listener created successfully")
+
+	// Set socket permissions
+	if err := os.Chmod(s.addr, 0666); err != nil {
+		log.Printf("Failed to set socket permissions: %v", err)
+		listener.Close()
+		return err
+	}
+	log.Printf("Socket permissions set successfully")
+
+	// Update listener reference before starting server
+	s.listener = listener
+
+	// Create a new server instance for the new listener
+	newSrv := &http.Server{
+		Handler: s.engine,
+	}
+
+	// Start new server goroutine
+	go func() {
+		log.Printf("Starting new server with recreated listener")
+		if err := newSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("Server error after recreation: %v\n", err)
+		}
+	}()
+
+	// Don't actively close the old listener
+	// This prevents the socket file from being deleted
+	if oldListener != nil {
+		log.Printf("Old listener will exit naturally")
+	}
+
+	// Verify socket file exists after a short delay
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(s.addr); err != nil {
+		log.Printf("Warning: Socket file verification failed: %v", err)
+		return err
+	}
+	log.Printf("Socket file verified: %s", s.addr)
+
+	return nil
 }
 
 func main() {
@@ -533,6 +598,10 @@ func main() {
 	// Use http.Server's Shutdown method
 	if err := server.srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	if server.listener != nil {
+		server.listener.Close()
 	}
 
 	if err := os.RemoveAll(server.addr); err != nil {
