@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -180,11 +181,20 @@ func getNetworkServices() ([]string, error) {
 	var services []string
 
 	for _, line := range lines {
-		if strings.HasPrefix(line, "(") && strings.Contains(line, ")") {
-			service := strings.TrimSpace(strings.SplitN(line, ")", 2)[1])
-			if service != "" {
-				services = append(services, service)
-				log.Printf("Found network service: %s", service)
+
+		// Skip hardware port lines like "(Hardware Port: ..., Device: ...)"
+		if strings.HasPrefix(line, "(") && strings.Contains(line, ")") && !strings.Contains(line, "Hardware Port:") {
+
+			parts := strings.SplitN(line, ") ", 2)
+			if len(parts) == 2 {
+				service := strings.TrimSpace(parts[1])
+				if service != "" && service != "*" {
+
+					service = strings.TrimPrefix(service, "*")
+					service = strings.TrimSpace(service)
+					services = append(services, service)
+					log.Printf("Found network service: %s", service)
+				}
 			}
 		}
 	}
@@ -352,6 +362,7 @@ func (s *Server) setupRoutes() {
 
 		// Set PAC proxy for each service
 		var errorMessages []string
+		var successCount int
 		for _, service := range services {
 			log.Printf("Setting PAC proxy for service: %s", service)
 			if err := setPACProxy(service, validURL); err != nil {
@@ -359,19 +370,25 @@ func (s *Server) setupRoutes() {
 				errorMessages = append(errorMessages, "Failed to set PAC proxy for "+service+": "+err.Error())
 			} else {
 				log.Printf("Successfully set PAC proxy for %s to %s", service, validURL)
+				successCount++
 			}
 		}
 
-		if len(errorMessages) > 0 {
-			log.Printf("Encountered errors setting PAC proxy: %v", errorMessages)
+		if successCount > 0 {
+			if len(errorMessages) > 0 {
+				log.Printf("Encountered some errors setting PAC proxy: %v", errorMessages)
+				c.String(200, fmt.Sprintf("PAC proxy set for %d/%d services. Some errors occurred: %s",
+					successCount, len(services), strings.Join(errorMessages, "; ")))
+			} else {
+				log.Printf("Successfully set PAC proxy for all services")
+				c.String(200, "PAC proxy has been set for all services")
+			}
+		} else {
+			log.Printf("Failed to set PAC proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": strings.Join(errorMessages, "\n"),
+				"error": "Failed to set PAC proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
-			return
 		}
-
-		log.Printf("Successfully set PAC proxy for all services")
-		c.String(200, "PAC proxy has been set for all services")
 	})
 
 	s.engine.POST("/global", func(c *gin.Context) {
@@ -407,6 +424,7 @@ func (s *Server) setupRoutes() {
 
 		// Process global proxy settings
 		var errorMessages []string
+		var successCount int
 		for _, service := range services {
 			log.Printf("Setting global proxy for service: %s", service)
 			if err := setGlobalProxy(service, global.HOST, global.PORT, global.BYPASS); err != nil {
@@ -414,19 +432,25 @@ func (s *Server) setupRoutes() {
 				errorMessages = append(errorMessages, "Failed to set global proxy for "+service+": "+err.Error())
 			} else {
 				log.Printf("Successfully set global proxy for %s", service)
+				successCount++
 			}
 		}
 
-		if len(errorMessages) > 0 {
-			log.Printf("Encountered errors setting global proxy: %v", errorMessages)
+		if successCount > 0 {
+			if len(errorMessages) > 0 {
+				log.Printf("Encountered some errors setting global proxy: %v", errorMessages)
+				c.String(200, fmt.Sprintf("Global proxy set for %d/%d services. Some errors occurred: %s",
+					successCount, len(services), strings.Join(errorMessages, "; ")))
+			} else {
+				log.Printf("Successfully set global proxy for all services")
+				c.String(200, "Global proxy has been set for all services")
+			}
+		} else {
+			log.Printf("Failed to set global proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": strings.Join(errorMessages, "\n"),
+				"error": "Failed to set global proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
-			return
 		}
-
-		log.Printf("Successfully set global proxy for all services")
-		c.String(200, "Global proxy has been set for all services")
 	})
 
 	s.engine.GET("/off", func(c *gin.Context) {
@@ -442,6 +466,7 @@ func (s *Server) setupRoutes() {
 
 		// Turn off proxy for each service
 		var errorMessages []string
+		var successCount int
 		for _, service := range services {
 			log.Printf("Turning off proxy for service: %s", service)
 			if err := turnOffProxies(service); err != nil {
@@ -449,19 +474,27 @@ func (s *Server) setupRoutes() {
 				errorMessages = append(errorMessages, "Failed to turn off proxy for "+service+": "+err.Error())
 			} else {
 				log.Printf("Successfully turned off proxy for %s", service)
+				successCount++
 			}
 		}
 
-		if len(errorMessages) > 0 {
-			log.Printf("Encountered errors turning off proxy: %v", errorMessages)
+		// If at least one service succeeded, consider it a partial success
+		if successCount > 0 {
+			if len(errorMessages) > 0 {
+				log.Printf("Encountered some errors turning off proxy: %v", errorMessages)
+				c.String(200, fmt.Sprintf("Proxy turned off for %d/%d services. Some errors occurred: %s",
+					successCount, len(services), strings.Join(errorMessages, "; ")))
+			} else {
+				log.Printf("Successfully turned off proxy for all services")
+				c.String(200, "Proxy has been turned off for all services")
+			}
+		} else {
+			// Only return error if ALL services failed
+			log.Printf("Failed to turn off proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": strings.Join(errorMessages, "\n"),
+				"error": "Failed to turn off proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
-			return
 		}
-
-		log.Printf("Successfully turned off proxy for all services")
-		c.String(200, "Proxy has been turned off for all services")
 	})
 }
 
