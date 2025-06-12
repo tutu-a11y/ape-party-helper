@@ -264,9 +264,30 @@ func setGlobalProxy(service, host, port, bypass string) error {
 
 	// Set bypass domains if provided
 	if bypass != "" {
-		cmd := exec.Command("networksetup", "-setproxybypassdomains", service, bypass)
-		if err := cmd.Run(); err != nil {
-			return err
+		// Split bypass domains using the same logic as validation
+		var domains []string
+		if strings.Contains(bypass, ",") {
+			domains = strings.Split(bypass, ",")
+		} else {
+			domains = strings.Split(bypass, " ")
+		}
+
+		// prepare arguments
+		var cleanDomains []string
+		for _, domain := range domains {
+			domain = strings.TrimSpace(domain)
+			if domain != "" {
+				cleanDomains = append(cleanDomains, domain)
+			}
+		}
+
+		if len(cleanDomains) > 0 {
+			args := []string{"-setproxybypassdomains", service}
+			args = append(args, cleanDomains...)
+			cmd := exec.Command("networksetup", args...)
+			if err := cmd.Run(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -499,20 +520,17 @@ func (s *Server) startSignalHandler() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGUSR1)
 
-		for {
-			select {
-			case <-sigChan:
-				log.Printf("Received SIGUSR1 signal, checking and recreating socket if needed")
-				if _, err := os.Stat(s.addr); os.IsNotExist(err) {
-					log.Printf("Socket file %s not found, recreating listener", s.addr)
-					if err := s.recreateListener(); err != nil {
-						log.Printf("Failed to recreate listener: %v", err)
-					} else {
-						log.Printf("Successfully recreated listener and socket file")
-					}
+		for range sigChan {
+			log.Printf("Received SIGUSR1 signal, checking and recreating socket if needed")
+			if _, err := os.Stat(s.addr); os.IsNotExist(err) {
+				log.Printf("Socket file %s not found, recreating listener", s.addr)
+				if err := s.recreateListener(); err != nil {
+					log.Printf("Failed to recreate listener: %v", err)
 				} else {
-					log.Printf("Socket file exists, no need to recreate")
+					log.Printf("Successfully recreated listener and socket file")
 				}
+			} else {
+				log.Printf("Socket file exists, no need to recreate")
 			}
 		}
 	}()
@@ -606,6 +624,10 @@ func main() {
 
 	if err := os.RemoveAll(server.addr); err != nil {
 		log.Printf("Failed to remove socket file: %v", err)
+	}
+
+	if logFile != nil {
+		logFile.Close()
 	}
 	log.Printf("Server shutdown completed")
 }
