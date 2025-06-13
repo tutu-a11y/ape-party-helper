@@ -22,6 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const Version = "1.0.0"
+
 var logFile *os.File
 
 func getLogPath() string {
@@ -631,14 +633,14 @@ func (s *Server) recreateListener() error {
 }
 
 func main() {
-	log.Printf("Starting mihomo-party-helper server")
+	log.Printf("Starting mihomo-party-helper server v%s", Version)
 	server := NewServer("/tmp/mihomo-party-helper.sock")
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 
-	log.Printf("Server started successfully")
+	log.Printf("Server v%s started successfully", Version)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
