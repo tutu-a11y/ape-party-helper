@@ -1,4 +1,4 @@
-name: Build
+name: Build Universal Binary
 
 on: workflow_dispatch
 permissions: write-all
@@ -9,38 +9,43 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Install Golang
         uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      
-      - name: Build amd64 binary
+
+      - name: Build AMD64 binary
         env:
           GOOS: darwin
           GOARCH: amd64
           CGO_ENABLED: 1
         run: go build -o party.ape.helper_amd64
-      
-      - name: Build arm64 binary
+
+      - name: Build ARM64 binary
         env:
           GOOS: darwin
           GOARCH: arm64
           CGO_ENABLED: 1
         run: go build -o party.ape.helper_arm64
-      
+
+      - name: Verify build outputs
+        run: |
+          ls -la party.ape.helper_*
+          file party.ape.helper_amd64
+          file party.ape.helper_arm64
+
       - name: Create Universal binary
         run: |
-          lipo -create -output party.ape.helper \ 
-            party.ape.helper_amd64 \ 
+          lipo -create -output party.ape.helper \
+            party.ape.helper_amd64 \
             party.ape.helper_arm64
-          rm party.ape.helper_amd64 party.ape.helper_arm64
           lipo -info party.ape.helper
-      
+
       - name: Release Universal Binary
         uses: softprops/action-gh-release@v2
         with:
-          name: Universal Binary
+          name: macOS Universal Binary
           tag_name: universal
           token: ${{ secrets.GITHUB_TOKEN }}
           files: party.ape.helper
