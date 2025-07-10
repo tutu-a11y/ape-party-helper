@@ -39,4 +39,4 @@ jobs:
           name: ${{ matrix.arch }}
           tag_name: ${{ matrix.arch }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          files: party.mihomo.helper
+          files: party.ape.helper

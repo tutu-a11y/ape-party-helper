@@ -1,4 +1,4 @@
-module party.mihomo.helper
+module party.ape.helper
 
 go 1.24.0
 

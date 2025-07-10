@@ -59,15 +59,15 @@ func getLogPath() string {
 				// Fallback to temporary directory
 				if homeDir == "" {
 					log.Printf("Warning: Unable to determine user home directory, using /tmp")
-					return filepath.Join("/tmp", "party.mihomo.helper.log")
+					return filepath.Join("/tmp", "party.ape.helper.log")
 				}
 			}
 		}
 	}
 
 	// Log directory
-	logDir := filepath.Join(homeDir, "Library", "Application Support", "mihomo-party", "logs")
-	return filepath.Join(logDir, "party.mihomo.helper.log")
+	logDir := filepath.Join(homeDir, "Library", "Application Support", "ape-party", "logs")
+	return filepath.Join(logDir, "party.ape.helper.log")
 }
 
 func init() {
@@ -78,7 +78,7 @@ func init() {
 	// Ensure log directory exists
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		// If unable to create specified directory, use temporary directory
-		logPath = filepath.Join("/tmp", "party.mihomo.helper.log")
+		logPath = filepath.Join("/tmp", "party.ape.helper.log")
 	}
 
 	// Create log file
@@ -633,8 +633,8 @@ func (s *Server) recreateListener() error {
 }
 
 func main() {
-	log.Printf("Starting mihomo-party-helper server v%s", Version)
-	server := NewServer("/tmp/mihomo-party-helper.sock")
+	log.Printf("Starting ape-party-helper server v%s", Version)
+	server := NewServer("/tmp/ape-party-helper.sock")
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
