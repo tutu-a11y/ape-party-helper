@@ -4,39 +4,43 @@ on: workflow_dispatch
 permissions: write-all
 
 jobs:
-  release-update:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: "x64"
-            goarch: "amd64"
-          - arch: "arm64"
-            goarch: "arm64"
+  build-universal:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      
       - name: Install Golang
         uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - name: Build
+      
+      - name: Build amd64 binary
         env:
           GOOS: darwin
-          GOAMD64: v1
-          GOARCH: ${{ matrix.goarch }}
-        run: go build
-      - name: Update Tag
-        uses: richardsimko/update-tag@v1
-        with:
-          tag_name: ${{ matrix.arch }}
+          GOARCH: amd64
+          CGO_ENABLED: 1
+        run: go build -o party.ape.helper_amd64
+      
+      - name: Build arm64 binary
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Release
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: 1
+        run: go build -o party.ape.helper_arm64
+      
+      - name: Create Universal binary
+        run: |
+          lipo -create -output party.ape.helper \ 
+            party.ape.helper_amd64 \ 
+            party.ape.helper_arm64
+          rm party.ape.helper_amd64 party.ape.helper_arm64
+          lipo -info party.ape.helper
+      
+      - name: Release Universal Binary
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ matrix.arch }}
-          tag_name: ${{ matrix.arch }}
+          name: Universal Binary
+          tag_name: universal
           token: ${{ secrets.GITHUB_TOKEN }}
           files: party.ape.helper
