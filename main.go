@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,9 +21,6 @@ import (
 const Version = "1.0.0"
 
 func init() {
-	// Log output to stdout only
-	log.SetOutput(os.Stdout)
-
 	// Gin log output to stdout
 	gin.DefaultWriter = os.Stdout
 	gin.DefaultErrorWriter = os.Stderr
@@ -125,7 +121,6 @@ func getNetworkServices() ([]string, error) {
 					service = strings.TrimPrefix(service, "*")
 					service = strings.TrimSpace(service)
 					services = append(services, service)
-					log.Printf("Found network service: %s", service)
 				}
 			}
 		}
@@ -135,7 +130,6 @@ func getNetworkServices() ([]string, error) {
 		return nil, errors.New("no network services found")
 	}
 
-	log.Printf("Total network services found: %d", len(services))
 	return services, nil
 }
 
@@ -250,28 +244,19 @@ func NewServer(addr string) *Server {
 }
 
 func (s *Server) setupRoutes() {
-	// Add logging for all routes
-	log.Printf("Setting up routes for server")
-
 	s.engine.POST("/pac", func(c *gin.Context) {
-		log.Printf("Received PAC proxy request with URL: %s", c.Request.URL)
 		var pac Pac
 
 		if err := c.ShouldBindJSON(&pac); err != nil {
-			log.Printf("Failed to parse PAC request: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
 			return
 		}
 
-		// Log received PAC URL
-		log.Printf("Received PAC URL: %s", pac.URL)
-
 		// Validate PAC URL
 		validURL, err := validatePacURL(pac.URL)
 		if err != nil {
-			log.Printf("PAC URL validation failed: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
@@ -279,44 +264,33 @@ func (s *Server) setupRoutes() {
 		}
 
 		// Get all network services
-		log.Printf("Getting network services")
 		services, err := getNetworkServices()
 		if err != nil {
-			log.Printf("Failed to get network services: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to get network services: " + err.Error(),
 			})
 			return
 		}
 
-		// Log available network services
-		log.Printf("Available network services: %v", services)
-
 		// Set PAC proxy for each service
 		var errorMessages []string
 		var successCount int
 		for _, service := range services {
-			log.Printf("Setting PAC proxy for service: %s", service)
 			if err := setPACProxy(service, validURL); err != nil {
-				log.Printf("Failed to set PAC proxy for %s: %v", service, err)
 				errorMessages = append(errorMessages, "Failed to set PAC proxy for "+service+": "+err.Error())
 			} else {
-				log.Printf("Successfully set PAC proxy for %s to %s", service, validURL)
 				successCount++
 			}
 		}
 
 		if successCount > 0 {
 			if len(errorMessages) > 0 {
-				log.Printf("Encountered some errors setting PAC proxy: %v", errorMessages)
 				c.String(200, fmt.Sprintf("PAC proxy set for %d/%d services. Some errors occurred: %s",
 					successCount, len(services), strings.Join(errorMessages, "; ")))
 			} else {
-				log.Printf("Successfully set PAC proxy for all services")
 				c.String(200, "PAC proxy has been set for all services")
 			}
 		} else {
-			log.Printf("Failed to set PAC proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to set PAC proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
@@ -324,11 +298,9 @@ func (s *Server) setupRoutes() {
 	})
 
 	s.engine.POST("/global", func(c *gin.Context) {
-		log.Printf("Received global proxy request with URL: %s", c.Request.URL)
 		var global Global
 
 		if err := c.ShouldBindJSON(&global); err != nil {
-			log.Printf("Failed to parse global proxy request: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
@@ -337,17 +309,14 @@ func (s *Server) setupRoutes() {
 
 		// Validate global proxy parameters
 		if err := validateGlobalProxy(global.HOST, global.PORT, global.BYPASS); err != nil {
-			log.Printf("Global proxy validation failed: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
 			return
 		}
 
-		log.Printf("Received global proxy settings: %v", global)
 		services, err := getNetworkServices()
 		if err != nil {
-			log.Printf("Failed to get network services for global proxy: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to get network services: " + err.Error(),
 			})
@@ -358,27 +327,21 @@ func (s *Server) setupRoutes() {
 		var errorMessages []string
 		var successCount int
 		for _, service := range services {
-			log.Printf("Setting global proxy for service: %s", service)
 			if err := setGlobalProxy(service, global.HOST, global.PORT, global.BYPASS); err != nil {
-				log.Printf("Failed to set global proxy for %s: %v", service, err)
 				errorMessages = append(errorMessages, "Failed to set global proxy for "+service+": "+err.Error())
 			} else {
-				log.Printf("Successfully set global proxy for %s", service)
 				successCount++
 			}
 		}
 
 		if successCount > 0 {
 			if len(errorMessages) > 0 {
-				log.Printf("Encountered some errors setting global proxy: %v", errorMessages)
 				c.String(200, fmt.Sprintf("Global proxy set for %d/%d services. Some errors occurred: %s",
 					successCount, len(services), strings.Join(errorMessages, "; ")))
 			} else {
-				log.Printf("Successfully set global proxy for all services")
 				c.String(200, "Global proxy has been set for all services")
 			}
 		} else {
-			log.Printf("Failed to set global proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to set global proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
@@ -386,10 +349,8 @@ func (s *Server) setupRoutes() {
 	})
 
 	s.engine.GET("/off", func(c *gin.Context) {
-		log.Printf("Received request to turn off proxy")
 		services, err := getNetworkServices()
 		if err != nil {
-			log.Printf("Failed to get network services for turning off proxy: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to get network services: " + err.Error(),
 			})
@@ -400,12 +361,9 @@ func (s *Server) setupRoutes() {
 		var errorMessages []string
 		var successCount int
 		for _, service := range services {
-			log.Printf("Turning off proxy for service: %s", service)
 			if err := turnOffProxies(service); err != nil {
-				log.Printf("Failed to turn off proxy for %s: %v", service, err)
 				errorMessages = append(errorMessages, "Failed to turn off proxy for "+service+": "+err.Error())
 			} else {
-				log.Printf("Successfully turned off proxy for %s", service)
 				successCount++
 			}
 		}
@@ -413,16 +371,13 @@ func (s *Server) setupRoutes() {
 		// If at least one service succeeded, consider it a partial success
 		if successCount > 0 {
 			if len(errorMessages) > 0 {
-				log.Printf("Encountered some errors turning off proxy: %v", errorMessages)
 				c.String(200, fmt.Sprintf("Proxy turned off for %d/%d services. Some errors occurred: %s",
 					successCount, len(services), strings.Join(errorMessages, "; ")))
 			} else {
-				log.Printf("Successfully turned off proxy for all services")
 				c.String(200, "Proxy has been turned off for all services")
 			}
 		} else {
 			// Only return error if ALL services failed
-			log.Printf("Failed to turn off proxy for any service: %v", errorMessages)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to turn off proxy for any service: " + strings.Join(errorMessages, "; "),
 			})
@@ -434,7 +389,6 @@ func (s *Server) setupRoutes() {
 func (s *Server) createSocket() error {
 	listener, err := net.Listen("unix", s.addr)
 	if err != nil {
-		log.Printf("Failed to create initial socket: %v", err)
 		return err
 	}
 
@@ -443,18 +397,16 @@ func (s *Server) createSocket() error {
 
 	// Set socket permissions
 	if err := os.Chmod(s.addr, 0666); err != nil {
-		log.Printf("Failed to set socket permissions: %v", err)
 		return err
 	}
 
 	// Start server in goroutine
 	go func() {
 		if err := s.srv.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v\n", err)
+			// Server error, silently continue
 		}
 	}()
 
-	log.Printf("Socket created successfully")
 	return nil
 }
 
@@ -463,7 +415,6 @@ func (s *Server) Start() error {
 
 	// Remove existing socket file if exists
 	if err := os.RemoveAll(s.addr); err != nil {
-		log.Printf("Failed to remove existing socket file: %v", err)
 		return err
 	}
 
@@ -475,7 +426,6 @@ func (s *Server) Start() error {
 	// Start signal handler for socket recreation
 	s.startSignalHandler()
 
-	log.Printf("Server started successfully, listening on %s", s.addr)
 	return nil
 }
 
@@ -486,16 +436,8 @@ func (s *Server) startSignalHandler() {
 		signal.Notify(sigChan, syscall.SIGUSR1)
 
 		for range sigChan {
-			log.Printf("Received SIGUSR1 signal, checking and recreating socket if needed")
 			if _, err := os.Stat(s.addr); os.IsNotExist(err) {
-				log.Printf("Socket file %s not found, recreating listener", s.addr)
-				if err := s.recreateListener(); err != nil {
-					log.Printf("Failed to recreate listener: %v", err)
-				} else {
-					log.Printf("Successfully recreated listener and socket file")
-				}
-			} else {
-				log.Printf("Socket file exists, no need to recreate")
+				s.recreateListener()
 			}
 		}
 	}()
@@ -503,31 +445,23 @@ func (s *Server) startSignalHandler() {
 
 // Recreate the entire listener when socket file is missing
 func (s *Server) recreateListener() error {
-	log.Printf("Recreating listener for socket %s", s.addr)
-
 	// Store reference to old listener but don't close it immediately
 	oldListener := s.listener
 
 	// Remove any existing socket file
-	if err := os.RemoveAll(s.addr); err != nil {
-		log.Printf("Failed to remove existing socket file: %v", err)
-	}
+	os.RemoveAll(s.addr)
 
 	// Create new listener
 	listener, err := net.Listen("unix", s.addr)
 	if err != nil {
-		log.Printf("Failed to recreate listener: %v", err)
 		return err
 	}
-	log.Printf("New listener created successfully")
 
 	// Set socket permissions
 	if err := os.Chmod(s.addr, 0666); err != nil {
-		log.Printf("Failed to set socket permissions: %v", err)
 		listener.Close()
 		return err
 	}
-	log.Printf("Socket permissions set successfully")
 
 	// Update listener reference before starting server
 	s.listener = listener
@@ -539,38 +473,31 @@ func (s *Server) recreateListener() error {
 
 	// Start new server goroutine
 	go func() {
-		log.Printf("Starting new server with recreated listener")
 		if err := newSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error after recreation: %v\n", err)
+			// Server error, silently continue
 		}
 	}()
 
 	// Don't actively close the old listener
 	// This prevents the socket file from being deleted
-	if oldListener != nil {
-		log.Printf("Old listener will exit naturally")
-	}
+	_ = oldListener
 
 	// Verify socket file exists after a short delay
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(s.addr); err != nil {
-		log.Printf("Warning: Socket file verification failed: %v", err)
 		return err
 	}
-	log.Printf("Socket file verified: %s", s.addr)
 
 	return nil
 }
 
 func main() {
-	log.Printf("Starting ape-party-helper server v%s", Version)
 	server := NewServer("/tmp/ape-party-helper.sock")
 
 	if err := server.Start(); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Server v%s started successfully", Version)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -580,16 +507,12 @@ func main() {
 
 	// Use http.Server's Shutdown method
 	if err := server.srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		os.Exit(1)
 	}
 
 	if server.listener != nil {
 		server.listener.Close()
 	}
 
-	if err := os.RemoveAll(server.addr); err != nil {
-		log.Printf("Failed to remove socket file: %v", err)
-	}
-
-	log.Printf("Server shutdown completed")
+	os.RemoveAll(server.addr)
 }
