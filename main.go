@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -12,8 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,80 +21,13 @@ import (
 
 const Version = "1.0.0"
 
-var logFile *os.File
-
-func getLogPath() string {
-	// Get user directory
-	var homeDir string
-
-	// Check SUDO_USER environment variable
-	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-		homeDir = filepath.Join("/Users", sudoUser)
-		log.Printf("Using SUDO_USER directory: %s", homeDir)
-	} else {
-		// Check regular HOME environment variable excluding root
-		if home := os.Getenv("HOME"); home != "" && home != "/var/root" {
-			homeDir = home
-			log.Printf("Using HOME directory: %s", homeDir)
-		} else {
-			// Get from system user information
-			if currentUser, err := user.Current(); err == nil && currentUser.HomeDir != "/var/root" {
-				homeDir = currentUser.HomeDir
-				log.Printf("Using current user directory: %s", homeDir)
-			} else {
-				// Look for user directories under /Users excluding shared folders
-				if userDirs, err := os.ReadDir("/Users"); err == nil {
-					for _, dir := range userDirs {
-						if dir.IsDir() && dir.Name() != "Shared" && dir.Name() != ".localized" {
-							homeDir = filepath.Join("/Users", dir.Name())
-							log.Printf("Using detected user directory: %s", homeDir)
-							break
-						}
-					}
-				}
-
-				// Fallback to temporary directory
-				if homeDir == "" {
-					log.Printf("Warning: Unable to determine user home directory, using /tmp")
-					return filepath.Join("/tmp", "party.ape.helper.log")
-				}
-			}
-		}
-	}
-
-	// Log directory
-	logDir := filepath.Join(homeDir, "Library", "Application Support", "ape-party", "logs")
-	return filepath.Join(logDir, "party.ape.helper.log")
-}
-
 func init() {
-	// Get log file path
-	logPath := getLogPath()
-	logDir := filepath.Dir(logPath)
-
-	// Ensure log directory exists
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		// If unable to create specified directory, use temporary directory
-		logPath = filepath.Join("/tmp", "party.ape.helper.log")
-	}
-
-	// Create log file
-	f, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		log.Fatalf("error opening log file %s: %v", logPath, err)
-	}
-
-	logFile = f
-
-	// Multi-writer output
-	multiWriter := io.MultiWriter(f, os.Stdout)
-	log.SetOutput(multiWriter)
+	// Log output to stdout only
+	log.SetOutput(os.Stdout)
 
 	// Gin log output to stdout
 	gin.DefaultWriter = os.Stdout
 	gin.DefaultErrorWriter = os.Stderr
-
-	log.Printf("Log file initialized at: %s", logPath)
 }
 
 type Server struct {
@@ -661,8 +591,5 @@ func main() {
 		log.Printf("Failed to remove socket file: %v", err)
 	}
 
-	if logFile != nil {
-		logFile.Close()
-	}
 	log.Printf("Server shutdown completed")
 }
